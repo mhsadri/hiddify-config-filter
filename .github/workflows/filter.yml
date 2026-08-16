@@ -183,10 +183,21 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No changes."
-          else
-            git commit -m "Update filtered proxy configs"
+            exit 0
           fi
 
-      - name: Push changes
+          git commit -m "Update filtered proxy configs"
+
+      - name: Sync and push
         run: |
+          git fetch origin main
+
+          echo "Local commit:"
+          git log -1 --oneline
+
+          echo "Remote commit:"
+          git log origin/main -1 --oneline
+
+          git rebase origin/main
+
           git push origin HEAD:main
