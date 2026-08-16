@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download source configs
         run: |
@@ -25,42 +27,78 @@ jobs:
       - name: Filter configs
         run: |
           python3 <<'PY'
-          from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+          from urllib.parse import (
+              urlsplit,
+              urlunsplit,
+              parse_qsl,
+              urlencode,
+              unquote,
+          )
 
           SOURCE = "source.txt"
           OUTPUT = "proxy_configs.txt"
 
-          valid_packet_encoding = {"", "xudp", "packetaddr"}
-          valid_vless_flow = {"", "xtls-rprx-vision"}
+          valid_packet_encoding = {
+              "",
+              "xudp",
+              "packetaddr",
+          }
+
+          valid_vless_flow = {
+              "",
+              "xtls-rprx-vision",
+          }
 
           kept = 0
           removed = 0
 
-          with open(SOURCE, "r", encoding="utf-8", errors="ignore") as src, \
-               open(OUTPUT, "w", encoding="utf-8") as out:
+          with open(
+              SOURCE,
+              "r",
+              encoding="utf-8",
+              errors="ignore"
+          ) as src, open(
+              OUTPUT,
+              "w",
+              encoding="utf-8"
+          ) as out:
 
               for raw in src:
-                  line = raw.rstrip("\n")
+                  line = raw.rstrip("\r\n")
 
-                  # Keep subscription metadata/comments/empty lines
+                  # Keep empty lines and comments.
                   if not line or line.startswith("#") or line.startswith("//"):
                       out.write(raw)
                       continue
 
-                  # Only inspect actual proxy URLs
+                  # Ignore lines that are not proxy URLs.
                   if "://" not in line:
                       out.write(raw)
                       continue
 
                   try:
-                      # Separate the URI from the display name after #
-                      # We need to preserve the fragment/name.
                       parts = urlsplit(line)
-
                       scheme = parts.scheme.lower()
 
-                      # Only VLESS needs the strict checks responsible
-                      # for the known sing-box crash.
+                      # --------------------------------------------------
+                      # IMPORTANT:
+                      # Hiddify requires every imported proxy profile
+                      # to have a non-empty name.
+                      #
+                      # Therefore:
+                      #   vless://...#name       -> KEEP
+                      #   vless://...             -> REMOVE
+                      #   vless://...#            -> REMOVE
+                      #   vless://...#%20         -> REMOVE
+                      # --------------------------------------------------
+
+                      fragment_name = unquote(parts.fragment).strip()
+
+                      if not fragment_name:
+                          removed += 1
+                          continue
+
+                      # Only VLESS needs the strict parameter checks.
                       if scheme != "vless":
                           out.write(raw)
                           kept += 1
@@ -78,24 +116,27 @@ jobs:
                           key_lower = key.lower()
                           value_lower = value.lower()
 
+                          # ----------------------------------------------
                           # packetEncoding / packet_encoding
+                          # ----------------------------------------------
                           if key_lower in {
                               "packetencoding",
                               "packet_encoding"
                           }:
-                              # "none" is dangerous for affected
-                              # sing-box/Hiddify versions.
+
+                              # "none" has caused problems with some
+                              # sing-box / Hiddify versions.
                               if value_lower == "none":
-                                  # Omit the parameter completely.
-                                  # This is equivalent to not specifying it
-                                  # and avoids the known panic.
+                                  # Remove it completely.
                                   continue
 
                               if value_lower not in valid_packet_encoding:
                                   bad = True
                                   break
 
+                          # ----------------------------------------------
                           # VLESS flow
+                          # ----------------------------------------------
                           if key_lower == "flow":
                               if value_lower not in valid_vless_flow:
                                   bad = True
@@ -115,25 +156,23 @@ jobs:
                           parts.fragment
                       ))
 
-                      # Empty fragment means an incomplete name.
-                      # Drop it only when the URI actually ends with #.
-                      if line.endswith("#"):
-                          removed += 1
-                          continue
-
                       out.write(rebuilt + "\n")
                       kept += 1
 
                   except Exception:
-                      # If a line cannot be parsed safely, don't feed it
-                      # to Hiddify.
+                      # Never put a malformed proxy URL into Hiddify.
                       removed += 1
 
           print(f"Kept: {kept}")
           print(f"Removed: {removed}")
           PY
 
-          rm source.txt
+          rm -f source.txt
+
+      - name: Sync with remote
+        run: |
+          git fetch origin main
+          git rebase origin/main
 
       - name: Commit filtered configs
         run: |
@@ -146,5 +185,8 @@ jobs:
             echo "No changes."
           else
             git commit -m "Update filtered proxy configs"
-            git push
           fi
+
+      - name: Push changes
+        run: |
+          git push origin HEAD:main
