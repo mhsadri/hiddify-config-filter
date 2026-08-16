@@ -18,6 +18,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ----------------------------------------------------------
+      # Sync FIRST.
+      # This must happen before generating proxy_configs.txt.
+      # ----------------------------------------------------------
+      - name: Sync with remote
+        run: |
+          git fetch origin main
+          git rebase origin/main
+
       - name: Download source configs
         run: |
           curl -fL \
@@ -66,7 +75,7 @@ jobs:
               for raw in src:
                   line = raw.rstrip("\r\n")
 
-                  # Keep empty lines and comments.
+                  # Keep comments and empty lines.
                   if not line or line.startswith("#") or line.startswith("//"):
                       out.write(raw)
                       continue
@@ -80,17 +89,17 @@ jobs:
                       parts = urlsplit(line)
                       scheme = parts.scheme.lower()
 
-                      # --------------------------------------------------
-                      # IMPORTANT:
-                      # Hiddify requires every imported proxy profile
-                      # to have a non-empty name.
+                      # ------------------------------------------------
+                      # Hiddify requires a non-empty profile name.
                       #
-                      # Therefore:
-                      #   vless://...#name       -> KEEP
-                      #   vless://...             -> REMOVE
-                      #   vless://...#            -> REMOVE
-                      #   vless://...#%20         -> REMOVE
-                      # --------------------------------------------------
+                      # Keep:
+                      #   ...#ServerName
+                      #
+                      # Remove:
+                      #   ...#
+                      #   ...        (no fragment/name)
+                      #   ...#%20
+                      # ------------------------------------------------
 
                       fragment_name = unquote(parts.fragment).strip()
 
@@ -98,7 +107,7 @@ jobs:
                           removed += 1
                           continue
 
-                      # Only VLESS needs the strict parameter checks.
+                      # Only VLESS needs these strict checks.
                       if scheme != "vless":
                           out.write(raw)
                           kept += 1
@@ -116,27 +125,25 @@ jobs:
                           key_lower = key.lower()
                           value_lower = value.lower()
 
-                          # ----------------------------------------------
-                          # packetEncoding / packet_encoding
-                          # ----------------------------------------------
+                          # --------------------------------------------
+                          # packetEncoding
+                          # --------------------------------------------
                           if key_lower in {
                               "packetencoding",
                               "packet_encoding"
                           }:
 
-                              # "none" has caused problems with some
-                              # sing-box / Hiddify versions.
+                              # Remove packetEncoding=none.
                               if value_lower == "none":
-                                  # Remove it completely.
                                   continue
 
                               if value_lower not in valid_packet_encoding:
                                   bad = True
                                   break
 
-                          # ----------------------------------------------
+                          # --------------------------------------------
                           # VLESS flow
-                          # ----------------------------------------------
+                          # --------------------------------------------
                           if key_lower == "flow":
                               if value_lower not in valid_vless_flow:
                                   bad = True
@@ -160,7 +167,6 @@ jobs:
                       kept += 1
 
                   except Exception:
-                      # Never put a malformed proxy URL into Hiddify.
                       removed += 1
 
           print(f"Kept: {kept}")
@@ -168,11 +174,6 @@ jobs:
           PY
 
           rm -f source.txt
-
-      - name: Sync with remote
-        run: |
-          git fetch origin main
-          git rebase origin/main
 
       - name: Commit filtered configs
         run: |
@@ -183,21 +184,10 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No changes."
-            exit 0
+          else
+            git commit -m "Update filtered proxy configs"
           fi
 
-          git commit -m "Update filtered proxy configs"
-
-      - name: Sync and push
+      - name: Push changes
         run: |
-          git fetch origin main
-
-          echo "Local commit:"
-          git log -1 --oneline
-
-          echo "Remote commit:"
-          git log origin/main -1 --oneline
-
-          git rebase origin/main
-
           git push origin HEAD:main
