@@ -1,0 +1,53 @@
+name: Update Hiddify Configs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */12 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update-configs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download and filter configs
+        run: |
+          curl -L \
+            "https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/refs/heads/main/configs/proxy_configs.txt" \
+            -o source.txt
+
+          awk '
+          {
+            line = $0
+            lower = tolower(line)
+
+            # Remove packetEncoding=none
+            if (lower ~ /packetencoding=none/) next
+            if (lower ~ /packet_encoding=none/) next
+
+            # Remove URLs with an empty fragment (#)
+            if (line ~ /^https?:\/\/.*#$/) next
+
+            print line
+          }
+          ' source.txt > proxy_configs.txt
+
+          rm source.txt
+
+      - name: Commit filtered configs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add proxy_configs.txt
+
+          git diff --cached --quiet || \
+            git commit -m "Update filtered proxy configs"
+
+          git push
